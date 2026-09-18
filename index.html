@@ -309,7 +309,7 @@ const FREQ=['1-0-0','0-0-1','1-0-1','1-1-1','0-1-0','SOS'];
 const TIMING=['After food','Before food'];
 const FORMS=[['Tab','Tab — tablet','dose'],['Cap','Cap — capsule','dose'],['Syp','Syp — syrup','liquid'],['Oint','Oint — ointment','topical'],['Drops','Drops','topical'],['Inj','Inj — injection','dose'],['Other','Other','topical']];
 const FORMMODE={}; FORMS.forEach(([v,,m])=>FORMMODE[v]=m);
-const mode=f=>FORMMODE[f]||'dose';
+const mode=f=>f?(FORMMODE[f]||'dose'):'';
 const NOTE_DEFAULT='Clean and dry the affected area, then apply as directed.';
  
 /* catalogue + dummy prices (₹) */
@@ -499,12 +499,12 @@ function rxFormHTML(){return `<div class="panel">
   <h2>Write prescription</h2><p class="sub">Pick the form, then the medicine — the fields adapt.</p>
   <div class="field"><label>Diagnosis / condition</label><input id="rxDx" placeholder="e.g. Viral fever"></div>
   <div class="rx-add-grid">
-    <div><label>Form</label><select id="rxForm" onchange="onFormChange()">${FORMS.map(f=>`<option value="${f[0]}">${f[1]}</option>`).join('')}</select></div>
+    <div><label>Form</label><select id="rxForm" onchange="onFormChange()"><option value="">— select form —</option>${FORMS.map(f=>`<option value="${f[0]}">${f[1]}</option>`).join('')}</select></div>
     <div><label>Medicine</label><input id="rxMed" list="medList" placeholder="start typing…"><datalist id="medList">${CATALOG.map(m=>`<option value="${m}">`).join('')}</datalist></div>
-    <div id="fDose"><label>Dose</label><div style="display:flex;gap:6px"><input id="rxDoseNum" placeholder="5" style="flex:1"><select id="rxDoseUnit" style="flex:1.1"><option>ml</option><option>teaspoon</option></select></div></div>
-    <div id="fFreq"><label>Freq</label><select id="rxFreq">${FREQ.map(f=>`<option>${f}</option>`).join('')}</select></div>
+    <div id="fDose"><label>Dose</label><div style="display:flex;gap:6px"><input id="rxDoseNum" placeholder="5" style="flex:1"><select id="rxDoseUnit" style="flex:1.1"><option value="">unit</option><option>ml</option><option>teaspoon</option></select></div></div>
+    <div id="fFreq"><label>Freq</label><select id="rxFreq"><option value="">—</option>${FREQ.map(f=>`<option>${f}</option>`).join('')}</select></div>
     <div id="fDays"><label>Days</label><input id="rxDur" type="number" placeholder="5" min="1"></div>
-    <div id="fTiming"><label>Timing</label><select id="rxTiming">${TIMING.map(t=>`<option>${t}</option>`).join('')}</select></div>
+    <div id="fTiming"><label>Timing</label><select id="rxTiming"><option value="">—</option>${TIMING.map(t=>`<option>${t}</option>`).join('')}</select></div>
     <div id="fInstr" style="grid-column:1/-1"><label>Application instructions (for this ointment/drops)</label><input id="rxInstr" placeholder="e.g. apply on the wound"></div>
   </div>
   <button class="btn btn-ghost btn-sm" style="margin-top:10px" onclick="addRxItem()">+ Add medicine</button>
@@ -516,31 +516,37 @@ function rxFormHTML(){return `<div class="panel">
 </div>`}
 function initRxForm(existing){
   draftItems = existing? existing.items.map(i=>({...i})) : [];
-  onFormChange(); renderDraft(); updateNoteVisibility();
-  setv('rxDur','5');
+  resetAddRow(); renderDraft(); updateNoteVisibility();
   if(existing){setv('rxDx',existing.diagnosis||'');setv('rxNote',existing.note||'');setv('rxFollow',existing.followUp||'');setv('rxRemarks',existing.remarks||'')}
 }
-function onFormChange(){const m=mode(val('rxForm'));show('fFreq',m!=='topical');show('fDays',m!=='topical');show('fTiming',m!=='topical');show('fDose',m==='liquid');show('fInstr',m==='topical')}
+function onFormChange(){const m=mode(val('rxForm'));const on=!!m;show('fFreq',on&&m!=='topical');show('fDays',on&&m!=='topical');show('fTiming',on&&m!=='topical');show('fDose',m==='liquid');show('fInstr',m==='topical')}
 function addRxItem(){
-  const form=val('rxForm'), m=mode(form), med=val('rxMed').trim();
-  if(!med){toast('Pick a medicine first');return}
+  const form=val('rxForm'); if(!form){toast('Pick a form first');return}
+  const m=mode(form), med=val('rxMed').trim();
+  if(!med){toast('Pick a medicine');return}
   const it={form,med};
   if(m==='topical'){it.instr=val('rxInstr'); if(it.instr) ensureNoteFromInstr(it);}
-  else{it.freq=val('rxFreq'); it.dur=val('rxDur')||'5'; it.timing=val('rxTiming'); if(m==='liquid'){it.doseNum=val('rxDoseNum')||''; it.doseUnit=val('rxDoseUnit')}}
+  else{
+    const freq=val('rxFreq'), dur=val('rxDur'), timing=val('rxTiming');
+    if(!freq){toast('Select a frequency');return}
+    if(!dur){toast('Enter number of days');return}
+    if(!timing){toast('Select timing');return}
+    it.freq=freq; it.dur=dur; it.timing=timing;
+    if(m==='liquid'){it.doseNum=val('rxDoseNum')||''; it.doseUnit=val('rxDoseUnit')||''}
+  }
   draftItems.push(it);
   resetAddRow();
   renderDraft(); updateNoteVisibility();
-  document.getElementById('rxMed').focus();
 }
 function resetAddRow(){
-  setv('rxForm','Tab');           // back to Tablet
+  setv('rxForm','');              // blank — doctor must choose
   setv('rxMed','');
-  setv('rxDoseNum',''); setv('rxDoseUnit','ml');
-  setv('rxFreq','1-0-0');
-  setv('rxDur','5');
-  setv('rxTiming','After food');
+  setv('rxDoseNum',''); setv('rxDoseUnit','');
+  setv('rxFreq','');
+  setv('rxDur','');
+  setv('rxTiming','');
   setv('rxInstr','');
-  onFormChange();                 // re-show the right fields for a Tablet
+  onFormChange();                 // hides the adaptive fields until a form is picked
 }
 function ensureNoteFromInstr(it){const n=document.getElementById('rxNote');if(n&&!n.value.trim())n.value=it.instr}
 function renderDraft(){const l=document.getElementById('rxList');if(!l)return;if(!draftItems.length){l.innerHTML='<div style="padding:11px; font-size:12.5px; color:var(--ink-soft)">No medicines added yet.</div>';return}l.innerHTML=draftItems.map((i,ix)=>`<div class="rx-line"><span><span class="mn">${medName(i)}</span> <span class="dir">${medDir(i)}</span></span><button class="x" onclick="draftItems.splice(${ix},1);renderDraft();updateNoteVisibility()">×</button></div>`).join('')}
