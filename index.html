@@ -568,7 +568,7 @@ function printHistory(rxId){const rx=db.prescriptions.find(r=>r.id===rxId);const
 /* ================= PHARMACY ================= */
 document.getElementById('phDate').value=todayISO;
 function perDay(freq){return /^\d-\d-\d$/.test(freq)?freq.split('-').reduce((a,b)=>a+ +b,0):null}
-let phDraft=null, phCtx=null;
+let phDraft=null, phCtx=null, pendingCancel=null;
 function loadRx(){
   const id=val('phId').trim().toUpperCase(), date=val('phDate'), token=+val('phToken');
   const box=document.getElementById('phResult');
@@ -577,6 +577,17 @@ function loadRx(){
   const rx=db.prescriptions.find(r=>r.bookingId===b.id);
   if(!rx){box.innerHTML='<div class="empty">That visit has no saved prescription.</div>';return}
   const p=db.patients.find(x=>x.id===id);
+  const activeOrder=db.pharmacyOrders.find(o=>o.prescriptionId===rx.id && o.status==='ready');
+  if(activeOrder){
+    box.innerHTML=`<div class="pcard">
+      <div class="top"><div><div class="name" style="font-size:16px">${p.name}</div><div class="meta">${rx.rxCode} · consult ${prettyDate(rx.date)}</div></div><div class="pid"><span class="k">ID</span> ${p.id}</div></div>
+      <p class="wa-note" style="margin:12px 0">This prescription is already billed under <b>${activeOrder.invoiceNo}</b> and not yet collected. A second bill would be a duplicate — reopen that invoice to change quantities, or cancel it.</p>
+      <div style="display:flex; gap:8px; flex-wrap:wrap">
+        <button class="btn btn-amber btn-sm" onclick="reopenOrder('${activeOrder.id}')">Reopen ${activeOrder.invoiceNo}</button>
+        <button class="btn btn-ghost btn-sm" onclick="cancelOrder('${activeOrder.id}')">Cancel ${activeOrder.invoiceNo}</button>
+      </div></div>`;
+    phDraft=null; phCtx=null; return;
+  }
   phCtx={rx,p,invoiceNo:null,orderId:null};
   phDraft=rx.items.map(i=>{const pd=perDay(i.freq);const auto=(mode(i.form)==='dose'&&pd!==null);const days=+i.dur||1;return {med:i.med,form:i.form,dir:medDir(i),days,auto,qty:auto?pd*days:1}});
   renderPhDraft();
@@ -618,14 +629,19 @@ function renderOrders(){
   const today=db.pharmacyOrders.filter(o=>o.date===todayISO);
   if(!today.length){l.innerHTML='<div class="empty">No orders billed yet.</div>';return}
   l.innerHTML=today.map(o=>{const p=db.patients.find(x=>x.id===o.patientId);const t=billTotals(o);
+    const stClass=o.status==='ready'?'st-ready':(o.status==='cancelled'?'tg-cancelled':'st-collected');
     return `<div class="ord">
-      <div class="oh"><span class="inv">${o.invoiceNo}</span><span class="st-pill ${o.status==='ready'?'st-ready':'st-collected'}">${o.status}</span></div>
+      <div class="oh"><span class="inv"${o.status==='cancelled'?' style="text-decoration:line-through;opacity:.6"':''}>${o.invoiceNo}</span><span class="st-pill ${stClass}">${o.status}</span></div>
       <div class="who"><b>${p.name}</b> · ${p.id} · ₹${t.grand.toFixed(2)}</div>
       <div class="meds">${o.lines.map(li=>`${li.form?li.form+' ':''}${li.med} <span class="q">×${li.qty}</span>`).join('<br>')}</div>
-      ${o.notified?`<div class="msg">📱 Patient notified: ${o.notified}</div>`:''}
+      ${(o.notified&&o.status!=='cancelled')?`<div class="msg">📱 Patient notified: ${o.notified}</div>`:''}
+      ${o.status==='cancelled'?'<div class="msg" style="background:#F5E1DC;color:var(--coral)">Invoice cancelled — this number is retired and won\u2019t be reused. The prescription can be billed again as a new invoice.</div>':''}
       <div class="acts">
-        <button class="btn btn-ghost btn-sm" onclick="reprint('${o.id}')">Reprint bill</button>
-        ${o.status==='ready'?`<button class="btn btn-ghost btn-sm" onclick="reopenOrder('${o.id}')">Reopen / edit</button><button class="btn btn-ghost btn-sm" onclick="collect('${o.id}')">Mark collected</button>`:''}
+        ${o.status==='cancelled'?'':`<button class="btn btn-ghost btn-sm" onclick="reprint('${o.id}')">Reprint bill</button>`}
+        ${o.status==='ready'?(pendingCancel===o.id
+          ? `<button class="btn btn-ghost btn-sm" style="color:var(--coral);border-color:var(--coral)" onclick="cancelOrder('${o.id}')">Confirm cancel</button><button class="btn btn-ghost btn-sm" onclick="keepOrder()">Keep</button>`
+          : `<button class="btn btn-ghost btn-sm" onclick="reopenOrder('${o.id}')">Reopen / edit</button><button class="btn btn-ghost btn-sm" onclick="askCancel('${o.id}')">Cancel invoice</button><button class="btn btn-ghost btn-sm" onclick="collect('${o.id}')">Mark collected</button>`
+        ):''}
       </div></div>`;
   }).join('');
 }
@@ -638,7 +654,19 @@ function reopenOrder(oid){
   document.querySelector('[data-view="pharmacy"]').click();
   toast(`Reopened ${o.invoiceNo} — edit and generate bill again (same invoice)`);
 }
-function collect(oid){db.pharmacyOrders.find(o=>o.id===oid).status='collected';renderOrders();refreshDBIfOpen();toast('Handed over ✅')}
+function collect(oid){db.pharmacyOrders.find(o=>o.id===oid).status='collected';pendingCancel=null;renderOrders();refreshDBIfOpen();toast('Handed over ✅')}
+function askCancel(oid){pendingCancel=oid;renderOrders()}
+function keepOrder(){pendingCancel=null;renderOrders()}
+function cancelOrder(oid){
+  const o=db.pharmacyOrders.find(x=>x.id===oid);
+  if(!o || o.status==='collected') return;   // collected sales are locked
+  o.status='cancelled'; o.notified='';
+  pendingCancel=null;
+  toast(`${o.invoiceNo} cancelled — number retired`);
+  document.getElementById('phResult').innerHTML='<div class="empty">Invoice cancelled. If the patient returns, this prescription can be billed again as a new invoice.</div>';
+  phDraft=null; phCtx=null;
+  renderOrders(); refreshDBIfOpen();
+}
  
 /* ================= A4 SHEETS ================= */
 const CLINIC={name:'Sunrise Clinic',doc:'Dr. A. Kumar, MBBS · Reg. 45872',addr:'2nd Cross, Jayanagar, Bengaluru 560011 · 080-2233 4455',gstin:'29ABCDE1234F1Z5'};
@@ -701,3 +729,4 @@ resetWA();docEmpty();updateSeen();renderDB();
 </script>
 </body>
 </html>
+ 
